@@ -1,13 +1,18 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Goal, GoalType, Category } from './types';
+import { Goal, GoalType, Category, UserStats } from './types';
 import GoalItem from './components/GoalItem';
-import { getGoalMotivation } from './services/geminiService';
+import { getGoalMotivation, generateVisionImage } from './services/geminiService';
 
 const App: React.FC = () => {
   const [goals, setGoals] = useState<Goal[]>(() => {
     const saved = localStorage.getItem('vision2026_goals');
     return saved ? JSON.parse(saved) : [];
+  });
+
+  const [stats, setStats] = useState<UserStats>(() => {
+    const saved = localStorage.getItem('vision2026_stats');
+    return saved ? JSON.parse(saved) : { xp: 0, level: 1 };
   });
   
   const [motivation, setMotivation] = useState<string>("Buscando inspiração para seu 2026...");
@@ -23,10 +28,15 @@ const App: React.FC = () => {
   const [newType, setNewType] = useState<GoalType>(GoalType.SIMPLE);
   const [newCategory, setNewCategory] = useState<Category>(Category.PERSONAL);
   const [newTarget, setNewTarget] = useState(1);
+  const [newDeadline, setNewDeadline] = useState('');
 
   useEffect(() => {
     localStorage.setItem('vision2026_goals', JSON.stringify(goals));
   }, [goals]);
+
+  useEffect(() => {
+    localStorage.setItem('vision2026_stats', JSON.stringify(stats));
+  }, [stats]);
 
   useEffect(() => {
     const fetchMotivation = async () => {
@@ -36,11 +46,26 @@ const App: React.FC = () => {
     fetchMotivation();
   }, [goals.length]);
 
+  const addXP = (amount: number) => {
+    setStats(prev => {
+      let newXp = prev.xp + amount;
+      let newLevel = prev.level;
+      const xpNeeded = prev.level * 100;
+      
+      if (newXp >= xpNeeded) {
+        newXp -= xpNeeded;
+        newLevel += 1;
+      }
+      return { xp: newXp, level: newLevel };
+    });
+  };
+
   const resetForm = () => {
     setNewTitle('');
     setNewType(GoalType.SIMPLE);
     setNewCategory(Category.PERSONAL);
     setNewTarget(1);
+    setNewDeadline('');
     setIsAdding(false);
     setEditingGoalId(null);
   };
@@ -52,15 +77,15 @@ const App: React.FC = () => {
     if (editingGoalId) {
       setGoals(prev => prev.map(g => {
         if (g.id === editingGoalId) {
-          const updated: Goal = {
+          return {
             ...g,
             title: newTitle,
             type: newType,
             category: newCategory,
             targetValue: newType === GoalType.NUMERIC ? newTarget : 1,
+            deadline: newDeadline || undefined,
             isCompleted: newType === GoalType.NUMERIC ? g.currentValue >= newTarget : g.isCompleted
           };
-          return updated;
         }
         return g;
       }));
@@ -74,10 +99,10 @@ const App: React.FC = () => {
         targetValue: newType === GoalType.NUMERIC ? newTarget : 1,
         isCompleted: false,
         createdAt: Date.now(),
+        deadline: newDeadline || undefined,
       };
       setGoals([newGoal, ...goals]);
     }
-
     resetForm();
   };
 
@@ -86,25 +111,34 @@ const App: React.FC = () => {
     setNewType(goal.type);
     setNewCategory(goal.category);
     setNewTarget(goal.targetValue);
+    setNewDeadline(goal.deadline || '');
     setEditingGoalId(goal.id);
     setIsAdding(true);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const toggleGoal = (id: string) => {
-    setGoals(prev => prev.map(g => 
-      g.id === id ? { ...g, isCompleted: !g.isCompleted } : g
-    ));
+    setGoals(prev => prev.map(g => {
+      if (g.id === id) {
+        const isNowCompleted = !g.isCompleted;
+        if (isNowCompleted) addXP(50);
+        return { ...g, isCompleted: isNowCompleted };
+      }
+      return g;
+    }));
   };
 
   const incrementGoal = (id: string) => {
     setGoals(prev => prev.map(g => {
       if (g.id === id && g.type === GoalType.NUMERIC) {
         const newVal = g.currentValue + 1;
+        const reachedTarget = newVal >= g.targetValue;
+        if (!g.isCompleted && reachedTarget) addXP(50);
+        else addXP(10);
         return { 
           ...g, 
           currentValue: newVal, 
-          isCompleted: newVal >= g.targetValue 
+          isCompleted: reachedTarget 
         };
       }
       return g;
@@ -118,12 +152,16 @@ const App: React.FC = () => {
     }
   };
 
-  // Drag and Drop Logic
+  const handleGenerateVision = async (id: string, title: string) => {
+    const url = await generateVisionImage(title);
+    if (url) {
+      setGoals(prev => prev.map(g => g.id === id ? { ...g, visionImageUrl: url } : g));
+    }
+  };
+
   const handleDragStart = (e: React.DragEvent, index: number) => {
     dragItem.current = index;
-    if (e.dataTransfer) {
-      e.dataTransfer.effectAllowed = "move";
-    }
+    if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
   };
 
   const handleDragOver = (e: React.DragEvent, index: number) => {
@@ -142,22 +180,31 @@ const App: React.FC = () => {
     }
   };
 
-  const stats = {
+  const goalSummary = {
     total: goals.length,
-    completed: goals.filter(g => g.isCompleted || (g.type === GoalType.NUMERIC && g.currentValue >= g.targetValue)).length,
+    completed: goals.filter(g => g.isCompleted).length,
   };
 
+  const nextLevelXp = stats.level * 100;
+  const xpPercentage = (stats.xp / nextLevelXp) * 100;
+
   return (
-    <div className="min-h-screen pb-20 bg-orange-50/30">
-      <header className="bg-orange-50 text-orange-950 pt-12 pb-24 px-6 border-b border-orange-100">
+    <div className="min-h-screen pb-24 bg-orange-50/30">
+      <header className="bg-orange-50 pt-12 pb-24 px-6 border-b border-orange-100">
         <div className="max-w-3xl mx-auto">
-          <div className="flex justify-between items-center mb-8">
+          <div className="flex justify-between items-start mb-8">
             <div>
               <h1 className="text-3xl font-black tracking-tight text-orange-900">Vision 2026</h1>
-              <p className="text-orange-700 font-medium mt-1">Transforme seus desejos em realidade.</p>
+              <div className="flex items-center gap-2 mt-2">
+                <div className="bg-orange-600 text-white text-[10px] font-black px-2 py-0.5 rounded">NÍVEL {stats.level}</div>
+                <div className="w-32 bg-orange-200 h-2 rounded-full overflow-hidden">
+                  <div className="bg-orange-600 h-full" style={{ width: `${xpPercentage}%` }}></div>
+                </div>
+                <span className="text-[10px] text-orange-800 font-bold">{stats.xp}/{nextLevelXp} XP</span>
+              </div>
             </div>
             <div className="text-right">
-              <div className="text-4xl font-black text-orange-600">{stats.completed}/{stats.total}</div>
+              <div className="text-4xl font-black text-orange-600">{goalSummary.completed}/{goalSummary.total}</div>
               <div className="text-[10px] uppercase font-bold tracking-widest text-orange-500">Concluídas</div>
             </div>
           </div>
@@ -170,18 +217,15 @@ const App: React.FC = () => {
                     <path d="M11 3a1 1 0 10-2 0v1a1 1 0 102 0V3zM15.657 5.757a1 1 0 00-1.414-1.414l-.707.707a1 1 0 001.414 1.414l.707-.707zM18 10a1 1 0 01-1 1h-1a1 1 0 110-2h1a1 1 0 011 1zM5.05 6.464A1 1 0 106.464 5.05l-.707-.707a1 1 0 00-1.414 1.414l.707.707zM5 10a1 1 0 01-1 1H3a1 1 0 110-2h1a1 1 0 011 1zM8 16v-1a1 1 0 112 0v1a1 1 0 11-2 0zM13.536 14.95a1 1 0 011.414 1.414l-.707.707a1 1 0 01-1.414-1.414l.707-.707zM16 18a1 1 0 11-2 0 1 1 0 012 0z" />
                   </svg>
                 </div>
-                <span className="text-[10px] font-black uppercase tracking-widest text-orange-600">Dica de IA</span>
+                <span className="text-[10px] font-black uppercase tracking-widest text-orange-600">Mentor IA</span>
               </div>
               {motivation.length > 80 && (
-                <button 
-                  onClick={() => setIsMotivationExpanded(!isMotivationExpanded)}
-                  className="text-[10px] font-bold uppercase tracking-widest text-orange-500 hover:text-orange-700 transition-colors"
-                >
+                <button onClick={() => setIsMotivationExpanded(!isMotivationExpanded)} className="text-[10px] font-bold uppercase text-orange-500 hover:text-orange-700">
                   {isMotivationExpanded ? 'Recolher' : 'Ver tudo'}
                 </button>
               )}
             </div>
-            <p className={`text-gray-700 italic font-medium leading-relaxed transition-all duration-300 ${isMotivationExpanded ? '' : 'line-clamp-2'}`}>
+            <p className={`text-gray-700 italic font-medium leading-relaxed ${isMotivationExpanded ? '' : 'line-clamp-2'}`}>
               "{motivation}"
             </p>
           </div>
@@ -190,11 +234,11 @@ const App: React.FC = () => {
 
       <main className="max-w-3xl mx-auto px-6 -mt-12">
         <div className="flex justify-between items-center mb-6">
-          <h2 className="text-xl font-bold text-gray-800">Minhas Prioridades</h2>
+          <h2 className="text-xl font-bold text-gray-800">Prioridades</h2>
           {!isAdding && (
             <button 
               onClick={() => setIsAdding(true)}
-              className="bg-orange-600 hover:bg-orange-700 text-white font-bold px-5 py-2.5 rounded-xl shadow-lg transition-all flex items-center gap-2 active:scale-95"
+              className="bg-orange-600 hover:bg-orange-700 text-white font-bold px-5 py-2.5 rounded-xl shadow-lg flex items-center gap-2 active:scale-95"
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
                 <path fillRule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clipRule="evenodd" />
@@ -206,75 +250,42 @@ const App: React.FC = () => {
 
         {isAdding && (
           <div className="bg-white rounded-2xl shadow-xl border border-orange-200 p-6 mb-8 animate-in fade-in slide-in-from-top-2">
-            <h3 className="text-lg font-black text-orange-900 mb-4">
-              {editingGoalId ? 'Editar Meta' : 'Criar Nova Meta'}
-            </h3>
+            <h3 className="text-lg font-black text-orange-900 mb-4">{editingGoalId ? 'Editar Meta' : 'Nova Meta'}</h3>
             <form onSubmit={addOrUpdateGoal}>
-              <div className="mb-4">
-                <label className="block text-xs font-bold text-orange-600 uppercase mb-1">Título da Meta</label>
-                <input 
-                  autoFocus
-                  type="text" 
-                  value={newTitle}
-                  onChange={(e) => setNewTitle(e.target.value)}
-                  placeholder="Ex: Treinar Muay Thai"
-                  className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-orange-500 outline-none transition-all"
-                />
-              </div>
-              
-              <div className="grid grid-cols-2 gap-4 mb-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                <div className="md:col-span-2">
+                  <label className="block text-xs font-bold text-orange-600 uppercase mb-1">Título</label>
+                  <input autoFocus type="text" value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder="Ex: Aprender Alemão" className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-orange-500 outline-none" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-orange-600 uppercase mb-1">Prazo (Opcional)</label>
+                  <input type="date" value={newDeadline} onChange={(e) => setNewDeadline(e.target.value)} className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none" />
+                </div>
                 <div>
                   <label className="block text-xs font-bold text-orange-600 uppercase mb-1">Tipo</label>
-                  <select 
-                    value={newType}
-                    onChange={(e) => setNewType(e.target.value as GoalType)}
-                    className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:ring-2 focus:ring-orange-500 outline-none"
-                  >
-                    <option value={GoalType.SIMPLE}>Checklist</option>
-                    <option value={GoalType.NUMERIC}>Contagem de Dias</option>
+                  <select value={newType} onChange={(e) => setNewType(e.target.value as GoalType)} className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none">
+                    <option value={GoalType.SIMPLE}>Tarefa Única</option>
+                    <option value={GoalType.NUMERIC}>Contador de Dias</option>
                   </select>
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-orange-600 uppercase mb-1">Categoria</label>
-                  <select 
-                    value={newCategory}
-                    onChange={(e) => setNewCategory(e.target.value as Category)}
-                    className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:ring-2 focus:ring-orange-500 outline-none"
-                  >
-                    {Object.values(Category).map(cat => (
-                      <option key={cat} value={cat}>{cat}</option>
-                    ))}
+                  <select value={newCategory} onChange={(e) => setNewCategory(e.target.value as Category)} className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none">
+                    {Object.values(Category).map(cat => <option key={cat} value={cat}>{cat}</option>)}
                   </select>
                 </div>
+                {newType === GoalType.NUMERIC && (
+                  <div>
+                    <label className="block text-xs font-bold text-orange-600 uppercase mb-1">Objetivo (Total)</label>
+                    <input type="number" value={newTarget} onChange={(e) => setNewTarget(Number(e.target.value))} min="1" className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none" />
+                  </div>
+                )}
               </div>
-
-              {newType === GoalType.NUMERIC && (
-                <div className="mb-6">
-                  <label className="block text-xs font-bold text-orange-600 uppercase mb-1">Objetivo (dias totais)</label>
-                  <input 
-                    type="number" 
-                    value={newTarget}
-                    onChange={(e) => setNewTarget(Number(e.target.value))}
-                    min="1"
-                    className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:ring-2 focus:ring-orange-500 outline-none"
-                  />
-                </div>
-              )}
-
               <div className="flex gap-3">
-                <button 
-                  type="submit"
-                  className="flex-1 bg-orange-600 text-white font-black py-3 rounded-xl hover:bg-orange-700 transition-colors shadow-md"
-                >
-                  {editingGoalId ? 'Salvar Alterações' : 'Confirmar Meta'}
+                <button type="submit" className="flex-1 bg-orange-600 text-white font-black py-3 rounded-xl hover:bg-orange-700 shadow-md">
+                  {editingGoalId ? 'Salvar Alterações' : 'Criar Meta (+XP)'}
                 </button>
-                <button 
-                  type="button"
-                  onClick={resetForm}
-                  className="px-6 py-3 rounded-xl border border-gray-200 text-gray-600 font-bold hover:bg-gray-50 transition-colors"
-                >
-                  Cancelar
-                </button>
+                <button type="button" onClick={resetForm} className="px-6 py-3 rounded-xl border border-gray-200 text-gray-600 font-bold">Cancelar</button>
               </div>
             </form>
           </div>
@@ -283,25 +294,17 @@ const App: React.FC = () => {
         <div className="space-y-1">
           {goals.length === 0 ? (
             <div className="text-center py-20 bg-white rounded-3xl border-2 border-dashed border-orange-100">
-              <div className="text-6xl mb-4 opacity-50">☀️</div>
-              <h3 className="text-xl font-black text-gray-800">Seu 2026 está em branco</h3>
-              <p className="text-gray-500 max-w-xs mx-auto mt-2">
-                Comece a planejar seus grandes feitos agora mesmo!
-              </p>
+              <div className="text-6xl mb-4 opacity-50">🏆</div>
+              <h3 className="text-xl font-black text-gray-800">Pronto para subir de nível?</h3>
+              <p className="text-gray-500 mt-2">Crie sua primeira meta para ganhar XP.</p>
             </div>
           ) : (
             goals.map((goal, index) => (
               <GoalItem 
-                key={goal.id} 
-                goal={goal} 
-                index={index}
-                onToggle={toggleGoal}
-                onIncrement={incrementGoal}
-                onDelete={deleteGoal}
-                onEdit={handleEdit}
-                onDragStart={handleDragStart}
-                onDragOver={handleDragOver}
-                onDragEnd={handleDrop}
+                key={goal.id} goal={goal} index={index}
+                onToggle={toggleGoal} onIncrement={incrementGoal} onDelete={deleteGoal} onEdit={handleEdit}
+                onGenerateVision={handleGenerateVision}
+                onDragStart={handleDragStart} onDragOver={handleDragOver} onDragEnd={handleDrop}
               />
             ))
           )}
@@ -310,9 +313,8 @@ const App: React.FC = () => {
 
       <footer className="fixed bottom-6 left-0 right-0 flex justify-center pointer-events-none">
         <div className="bg-orange-900/90 text-white backdrop-blur shadow-2xl px-6 py-3 rounded-full pointer-events-auto flex items-center gap-3 border border-orange-800/50">
-          <div className="w-2 h-2 rounded-full bg-orange-400 animate-pulse"></div>
-          <span className="text-sm font-black uppercase tracking-widest">
-            {stats.completed === stats.total && stats.total > 0 ? 'Ano Concluído! 🏆' : `Progresso: ${stats.completed} de ${stats.total}`}
+          <span className="text-xs font-black uppercase tracking-widest">
+            {stats.level >= 10 ? 'MESTRE DE 2026 🔥' : `Nível ${stats.level} - Explorador`}
           </span>
         </div>
       </footer>

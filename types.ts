@@ -21,9 +21,11 @@ export interface Goal {
   targetValue: number;
   isCompleted: boolean;
   createdAt: number;
+  deadline?: string;
+  visionImageUrl?: string;
 }
 
-export interface AIInsight {
-  message: string;
-  suggestion: string;
+export interface UserStats {
+  xp: number;
+  level: number;
 }

@@ -26,26 +26,30 @@ export const getGoalMotivation = async (goals: Goal[]): Promise<string> => {
   }
 };
 
-export const refineGoal = async (goalTitle: string): Promise<{ suggestedTarget: number, tip: string }> => {
+export const generateVisionImage = async (goalTitle: string): Promise<string | null> => {
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: `Analise a meta "${goalTitle}" para o ano de 2026. Sugira um número de repetições anual ideal e uma dica rápida de consistência. Responda em JSON.`,
+      model: 'gemini-2.5-flash-image',
+      contents: {
+        parts: [
+          { text: `A cinematic, highly detailed and inspiring 4k image representing the success of the goal: "${goalTitle}". Style: Modern, clean, professional photography.` }
+        ]
+      },
       config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            suggestedTarget: { type: Type.NUMBER },
-            tip: { type: Type.STRING }
-          },
-          required: ["suggestedTarget", "tip"]
+        imageConfig: {
+          aspectRatio: "16:9"
         }
       }
     });
 
-    return JSON.parse(response.text);
+    for (const part of response.candidates[0].content.parts) {
+      if (part.inlineData) {
+        return `data:image/png;base64,${part.inlineData.data}`;
+      }
+    }
+    return null;
   } catch (error) {
-    return { suggestedTarget: 100, tip: "A consistência é a chave para o sucesso." };
+    console.error("Image generation failed", error);
+    return null;
   }
 };
